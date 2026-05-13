@@ -388,6 +388,14 @@ def show_fov_dff_click_viewer(list_session_names, list_ops, read_masks, read_dff
     frame_start = widgets.IntText(value=0, description='Start')
     frame_window = widgets.IntText(value=max_points, description='Window')
     status = widgets.HTML()
+    legend = widgets.HTML(
+        value=(
+            "<b>Mask legend</b>: "
+            "<span style='color:#0000ff'>blue</span> = excitatory, "
+            "<span style='color:#ff00ff'>pink</span> = inhibitory, "
+            "<span style='color:#808080'>white</span> = unsure"
+        )
+    )
     fov_output = widgets.Output()
     trace_output = widgets.Output()
 
@@ -429,6 +437,11 @@ def show_fov_dff_click_viewer(list_session_names, list_ops, read_masks, read_dff
                 'labels': np.asarray(labels),
                 'masks': np.asarray(masks),
                 'mean_func': np.asarray(mean_func),
+                'fov_overlay': _superimpose_mask_func_image(
+                    np.asarray(mean_func),
+                    np.asarray(masks),
+                    np.asarray(labels),
+                ),
                 'dff': dff,
                 'time_ms': time_ms,
                 'centroids': centroids,
@@ -439,12 +452,6 @@ def show_fov_dff_click_viewer(list_session_names, list_ops, read_masks, read_dff
                 'neuron_to_roi': neuron_to_roi,
             }
         return cache[session_name]
-
-    def fov_rgb(mean_func):
-        green = (_normalize_image(mean_func) * 255).astype(np.uint8)
-        rgb = np.zeros((*green.shape, 3), dtype=np.uint8)
-        rgb[..., 1] = green
-        return rgb
 
     def downsample_indices(n_time):
         start = max(0, int(frame_start.value or 0))
@@ -484,7 +491,7 @@ def show_fov_dff_click_viewer(list_session_names, list_ops, read_masks, read_dff
         sel_x, sel_y = selected_centroid(session, neuron)
 
         fig = go.FigureWidget()
-        fig.add_trace(go.Image(z=fov_rgb(session['mean_func']), name='FOV'))
+        fig.add_trace(go.Image(z=session['fov_overlay'], name='FOV'))
         fig.add_trace(go.Scatter(
             x=xs,
             y=ys,
@@ -633,6 +640,7 @@ def show_fov_dff_click_viewer(list_session_names, list_ops, read_masks, read_dff
         session_dropdown,
         widgets.HBox([neuron_dropdown, frame_start, frame_window]),
         status,
+        legend,
         fov_output,
         trace_output,
     ]))
@@ -720,6 +728,62 @@ def _load_dff_time_ms(neural_trials_path, n_time, ops):
     fs = float(ops.get('fs', 30.0) or 30.0)
     dt_ms = 1000.0 / fs
     return np.arange(n_time, dtype=float) * dt_ms
+
+
+def _superimpose_mask_func_image(mean_func, masks, labels):
+    base = (_normalize_image(mean_func) * 255).astype(np.uint8)
+    rgb = np.zeros((*base.shape, 3), dtype=np.uint8)
+    rgb[..., 1] = base
+
+    masks = np.asarray(masks)
+    labels = np.asarray(labels).reshape(-1)
+    roi_ids = [int(roi_id) for roi_id in np.unique(masks) if roi_id > 0]
+    if not roi_ids:
+        return rgb
+
+    for roi_id in roi_ids:
+        roi_mask = masks == roi_id
+        if not np.any(roi_mask):
+            continue
+        boundary = _mask_boundary(roi_mask)
+        if not np.any(boundary):
+            continue
+        rgb[boundary] = _roi_boundary_color(_roi_label_for_id(roi_id, labels))
+
+    return rgb
+
+
+def _mask_boundary(mask):
+    mask = np.asarray(mask, dtype=bool)
+    up = np.zeros_like(mask)
+    down = np.zeros_like(mask)
+    left = np.zeros_like(mask)
+    right = np.zeros_like(mask)
+    up[1:, :] = mask[:-1, :]
+    down[:-1, :] = mask[1:, :]
+    left[:, 1:] = mask[:, :-1]
+    right[:, :-1] = mask[:, 1:]
+    interior = mask & up & down & left & right
+    return mask & ~interior
+
+
+def _roi_label_for_id(roi_id, labels):
+    roi_id = int(roi_id)
+    if labels.ndim != 1 or len(labels) == 0:
+        return 0
+    if 0 <= roi_id < len(labels):
+        return int(labels[roi_id])
+    if 0 <= roi_id - 1 < len(labels):
+        return int(labels[roi_id - 1])
+    return 0
+
+
+def _roi_boundary_color(label):
+    if label == 1:
+        return np.array([255, 0, 255], dtype=np.uint8)
+    if label == -1:
+        return np.array([0, 0, 255], dtype=np.uint8)
+    return np.array([255, 255, 255], dtype=np.uint8)
 
 
 def _normalize_image(image):
