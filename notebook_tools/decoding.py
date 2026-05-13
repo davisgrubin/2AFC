@@ -205,8 +205,10 @@ def neural_decoder_svm(data, labels, neu_time, trial_type, isi, label_names, shu
         os.makedirs(figures_dir, exist_ok=True)
         # Add shuffle info to filename if present
         shuffle_str = f"_{shuffle}" if shuffle is not None else ""
-        fig_path = os.path.join(figures_dir, f'Confusion Matrix{shuffle_str}_{label_names[0]}.pdf')
-        plt.savefig(fig_path, dpi=300, bbox_inches='tight')
+        pdf_path = os.path.join(figures_dir, f'Confusion Matrix{shuffle_str}_{label_names[0]}.pdf')
+        png_path = os.path.join(figures_dir, f'Confusion Matrix{shuffle_str}_{label_names[0]}.png')
+        plt.savefig(pdf_path, dpi=300, bbox_inches='tight')
+        plt.savefig(png_path, dpi=150, bbox_inches='tight')
     plt.close()
     # plt.show()
     
@@ -290,8 +292,10 @@ def neural_decoder_svm(data, labels, neu_time, trial_type, isi, label_names, shu
         os.makedirs(figures_dir, exist_ok=True)
         # Add shuffle info to filename if present
         shuffle_str = f"_{shuffle}" if shuffle is not None else ""
-        fig_path = os.path.join(figures_dir, f'SVM_Feature_Importance_Heatmap{shuffle_str}_{label_names[0]}.pdf')
-        plt.savefig(fig_path, dpi=300, bbox_inches='tight')
+        pdf_path = os.path.join(figures_dir, f'SVM_Feature_Importance_Heatmap{shuffle_str}_{label_names[0]}.pdf')
+        png_path = os.path.join(figures_dir, f'SVM_Feature_Importance_Heatmap{shuffle_str}_{label_names[0]}.png')
+        plt.savefig(pdf_path, dpi=300, bbox_inches='tight')
+        plt.savefig(png_path, dpi=150, bbox_inches='tight')
         plt.close()
     plt.close()
     
@@ -628,8 +632,10 @@ def plot_temporal_decoding_accuracy(results, isi, trial_type, decoding, save_pat
     if save_path is not None:
         figures_dir = os.path.join(save_path, 'Figures', 'decoder')
         os.makedirs(figures_dir, exist_ok=True)
-        fig_path = os.path.join(figures_dir, f'temporal_decoding_accuracy_{decoding}.pdf')
-        plt.savefig(fig_path, dpi=300, bbox_inches='tight')
+        pdf_path = os.path.join(figures_dir, f'temporal_decoding_accuracy_{decoding}.pdf')
+        png_path = os.path.join(figures_dir, f'temporal_decoding_accuracy_{decoding}.png')
+        fig.savefig(pdf_path, dpi=300, bbox_inches='tight')
+        fig.savefig(png_path, dpi=150, bbox_inches='tight')
         plt.close()
     plt.close()
 
@@ -683,8 +689,10 @@ def plot_shuffle_vs_normal(results, results_shuffled, neu_time, isi, trial_type,
     if save_path is not None:
         figures_dir = os.path.join(save_path, 'Figures', 'decoder')
         os.makedirs(figures_dir, exist_ok=True)
-        fig_path = os.path.join(figures_dir, f'average_weights.pdf')
-        plt.savefig(fig_path, dpi=300, bbox_inches='tight')
+        pdf_path = os.path.join(figures_dir, f'average_weights.pdf')
+        png_path = os.path.join(figures_dir, f'average_weights.png')
+        fig.savefig(pdf_path, dpi=300, bbox_inches='tight')
+        fig.savefig(png_path, dpi=150, bbox_inches='tight')
         plt.close()
     plt.close()
 
@@ -1114,4 +1122,11 @@ def decoder_decision(neural_trials, labels, decoding, indice, l_frames=60, r_fra
     print(f"Best CV accuracy: {results_unbinned['cv_mean']:.3f}")
     print(f"Peak temporal decoding accuracy: {np.max(temporal_results['mean_acc_normal']):.3f}")
     
-    return temporal_results
+    return {
+        'results_unbinned': results_unbinned,
+        'results_unbinned_shuffled': results_unbinned_shuffled,
+        'temporal_results': temporal_results,
+        'best_cv_accuracy': float(results_unbinned['cv_mean']),
+        'test_balanced_accuracy': float(results_unbinned['test_balanced_accuracy']),
+        'peak_temporal_accuracy': float(np.max(temporal_results['mean_acc_normal'])),
+    }

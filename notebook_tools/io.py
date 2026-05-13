@@ -220,38 +220,68 @@ def create_superimposed_mask_images(mean_func, max_func, masks, labels, mean_ana
 
     return mean_fun_channel, max_fun_channel, superimpose_mask_func, superimpose_mask_anat
 
-def plot_fov_summary(mean_fun_channel, max_fun_channel, masks, superimpose_mask_func, mean_anat, superimpose_mask_anat, save_path=None):
+def _plot_fov_summary_single(
+    mean_fun_channel,
+    max_fun_channel,
+    masks,
+    superimpose_mask_func,
+    mean_anat,
+    superimpose_mask_anat,
+    save_path=None,
+    session_title=None,
+    roi_count=None,
+    show=True
+):
     import matplotlib.pyplot as plt
     import matplotlib.gridspec as gsp
+    import numpy as np
 
-    plt.figure(figsize=(45, 30))
+    fig = plt.figure(figsize=(45, 30))
     gs = gsp.GridSpec(2, 4)
 
+    def _imshow_safe(ax, img):
+        arr = np.asarray(img)
+        # Avoid matplotlib RGB clipping warnings by normalizing RGB float arrays.
+        if arr.ndim == 3 and arr.shape[-1] in (3, 4):
+            if np.issubdtype(arr.dtype, np.floating):
+                arr = np.clip(arr, 0.0, 1.0)
+            else:
+                arr = np.clip(arr, 0, 255)
+        ax.imshow(arr)
+
+    title_parts = []
+    if session_title is not None:
+        title_parts.append(str(session_title))
+    if roi_count is not None:
+        title_parts.append(f'{int(roi_count)} identified ROIs')
+    if title_parts:
+        fig.suptitle(' | '.join(title_parts), fontsize=28, y=0.98)
+
     # first row for functional channel
-    plt.subplot(gs[0, 0])
-    plt.imshow(mean_fun_channel)
+    ax = plt.subplot(gs[0, 0])
+    _imshow_safe(ax, mean_fun_channel)
     plt.title("Mean Functional Channel (green colorized)")
 
-    plt.subplot(gs[0, 1])
-    plt.imshow(max_fun_channel)
+    ax = plt.subplot(gs[0, 1])
+    _imshow_safe(ax, max_fun_channel)
     plt.title("Max Functional Channel (green colorized)")
 
-    plt.subplot(gs[0, 2])
-    plt.imshow(masks)
+    ax = plt.subplot(gs[0, 2])
+    _imshow_safe(ax, masks)
     plt.title("Masks")
 
-    plt.subplot(gs[0, 3])
-    plt.imshow(superimpose_mask_func)
+    ax = plt.subplot(gs[0, 3])
+    _imshow_safe(ax, superimpose_mask_func)
     plt.title("Superimposed Mask + Mean Func\nInhibitory (magenta), Excitatory (blue), Unsure (white)")
 
     # second row for anatomical channel
     if (mean_anat is not None) and (superimpose_mask_anat is not None):
-        plt.subplot(gs[1, 0])
-        plt.imshow(mean_anat)
+        ax = plt.subplot(gs[1, 0])
+        _imshow_safe(ax, mean_anat)
         plt.title("Mean Anatomical Channel (red colorized)")
 
-        plt.subplot(gs[1, 3])
-        plt.imshow(superimpose_mask_anat)
+        ax = plt.subplot(gs[1, 3])
+        _imshow_safe(ax, superimpose_mask_anat)
         plt.title("Superimposed Mask + Mean Anat\nInhibitory (magenta), Excitatory (blue), Unsure (white)")
 
     if save_path is not None:
@@ -259,8 +289,135 @@ def plot_fov_summary(mean_fun_channel, max_fun_channel, masks, superimpose_mask_
         if not os.path.exists(figures_dir):
             os.makedirs(figures_dir)
         save_path = os.path.join(figures_dir, 'FOV_summary.pdf')
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.show()
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    if show:
+        plt.show()
+        return None
+    return fig
+
+
+def plot_fov_summary(
+    mean_fun_channel,
+    max_fun_channel,
+    masks,
+    superimpose_mask_func,
+    mean_anat,
+    superimpose_mask_anat,
+    save_path=None,
+    session_names=None,
+    use_slider=False,
+    session_title=None,
+    navigator="slider",
+    roi_counts=None
+):
+    """
+    Plot FOV summary for either one session (existing behavior) or multiple sessions
+    with an interactive slider.
+
+    Multi-session mode is enabled when list/tuple inputs are passed (or `use_slider=True`).
+    In multi-session mode, each argument should be a list with matching length.
+    """
+    is_sequence = isinstance(mean_fun_channel, (list, tuple))
+    if not is_sequence and not use_slider:
+        inferred_title = session_title
+        if inferred_title is None and isinstance(save_path, str):
+            inferred_title = os.path.basename(os.path.normpath(save_path))
+        _plot_fov_summary_single(
+            mean_fun_channel, max_fun_channel, masks, superimpose_mask_func,
+            mean_anat, superimpose_mask_anat, save_path=save_path,
+            session_title=inferred_title,
+            roi_count=roi_counts
+        )
+        return
+
+    # Normalize to lists for multi-session mode.
+    mean_fun_list = list(mean_fun_channel) if isinstance(mean_fun_channel, (list, tuple)) else [mean_fun_channel]
+    max_fun_list = list(max_fun_channel) if isinstance(max_fun_channel, (list, tuple)) else [max_fun_channel]
+    masks_list = list(masks) if isinstance(masks, (list, tuple)) else [masks]
+    sup_func_list = list(superimpose_mask_func) if isinstance(superimpose_mask_func, (list, tuple)) else [superimpose_mask_func]
+    mean_anat_list = list(mean_anat) if isinstance(mean_anat, (list, tuple)) else [mean_anat]
+    sup_anat_list = list(superimpose_mask_anat) if isinstance(superimpose_mask_anat, (list, tuple)) else [superimpose_mask_anat]
+
+    n_sessions = len(mean_fun_list)
+    lengths = [len(max_fun_list), len(masks_list), len(sup_func_list), len(mean_anat_list), len(sup_anat_list)]
+    if any(length != n_sessions for length in lengths):
+        raise ValueError("All multi-session inputs must have the same length.")
+
+    if session_names is None:
+        session_names = [f"Session {i}" for i in range(n_sessions)]
+    elif len(session_names) != n_sessions:
+        raise ValueError("session_names length must match number of sessions.")
+
+    if roi_counts is None:
+        roi_count_list = [None] * n_sessions
+    elif isinstance(roi_counts, (list, tuple)):
+        if len(roi_counts) != n_sessions:
+            raise ValueError("roi_counts length must match number of sessions.")
+        roi_count_list = list(roi_counts)
+    else:
+        roi_count_list = [roi_counts] * n_sessions
+
+    save_paths = None
+    if isinstance(save_path, (list, tuple)):
+        if len(save_path) != n_sessions:
+            raise ValueError("save_path list length must match number of sessions.")
+        save_paths = list(save_path)
+
+    try:
+        import ipywidgets as widgets
+        from IPython.display import display
+    except Exception as exc:
+        raise ImportError(
+            "ipywidgets is required for slider mode. Install it or call with single-session inputs."
+        ) from exc
+
+    slider = widgets.IntSlider(
+        value=0, min=0, max=n_sessions - 1, step=1, description="Session"
+    )
+    prev_button = widgets.Button(description="◀ Prev")
+    next_button = widgets.Button(description="Next ▶")
+    title_html = widgets.HTML()
+    image_widget = widgets.Image(format="png")
+
+    def _render(idx):
+        idx = int(idx)
+        title_html.value = f"<b>{session_names[idx]}</b> (index {idx})"
+        import io
+        import matplotlib.pyplot as plt
+
+        with plt.ioff():
+            fig = _plot_fov_summary_single(
+                mean_fun_list[idx], max_fun_list[idx], masks_list[idx], sup_func_list[idx],
+                mean_anat_list[idx], sup_anat_list[idx],
+                save_path=(save_paths[idx] if save_paths is not None else None),
+                session_title=session_names[idx],
+                roi_count=roi_count_list[idx],
+                show=False
+            )
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=120, bbox_inches="tight")
+        plt.close(fig)
+        image_widget.value = buf.getvalue()
+
+    slider.observe(lambda change: _render(change["new"]), names="value")
+
+    def _prev(_):
+        slider.value = max(0, slider.value - 1)
+
+    def _next(_):
+        slider.value = min(n_sessions - 1, slider.value + 1)
+
+    prev_button.on_click(_prev)
+    next_button.on_click(_next)
+
+    display(title_html)
+    if navigator == "arrows":
+        controls = widgets.HBox([prev_button, next_button])
+    else:
+        controls = widgets.VBox([slider, widgets.HBox([prev_button, next_button])])
+    display(controls)
+    _render(0)
+    display(image_widget)
 
 # read raw_voltages.h5.
 def read_raw_voltages(ops, load_hifi=False):

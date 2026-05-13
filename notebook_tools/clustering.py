@@ -119,7 +119,9 @@ class NeuralActivityClustering:
             'aic_mean': [], 'aic_std': [],
             'silhouette_mean': [], 'silhouette_std': [],
             'calinski_harabasz_mean': [], 'calinski_harabasz_std': [],
-            'cv_stability_mean': [], 'cv_stability_std': []
+            'cv_stability_mean': [], 'cv_stability_std': [],
+            'status': [],
+            'error': [],
         }
         
         n_samples = len(self.data_processed)
@@ -133,36 +135,40 @@ class NeuralActivityClustering:
             
             fold_bic, fold_aic, fold_silhouette, fold_calinski = [], [], [], []
             fold_labels = []
+            failed_error = None
             
             # Cross-validation
-            for fold, (train_idx, val_idx) in enumerate(kf.split(self.data_processed)):
-                # Fit GMM on training data
-                gmm = GaussianMixture(
-                    n_components=n_clusters,
-                    covariance_type='diag',  # Changed from 'full' to 'diag'
-                    reg_covar=1e-6,          # Added regularization
-                    random_state=self.random_state + fold,
-                    max_iter=200,
-                    n_init=5                 # Multiple initializations
-                )
-                gmm.fit(self.data_processed[train_idx])
-                
-                # Predict on validation data
-                val_labels = gmm.predict(self.data_processed[val_idx])
-                fold_labels.append(val_labels)
-                
-                # Calculate metrics on validation set
-                fold_bic.append(gmm.bic(self.data_processed[val_idx]))
-                fold_aic.append(gmm.aic(self.data_processed[val_idx]))
-                
-                n_val_samples = len(val_idx)
-                n_val_labels = len(np.unique(val_labels))
-                if 1 < n_val_labels < n_val_samples:
-                    fold_silhouette.append(silhouette_score(self.data_processed[val_idx], val_labels))
-                    fold_calinski.append(calinski_harabasz_score(self.data_processed[val_idx], val_labels))
-                else:
-                    fold_silhouette.append(-1)
-                    fold_calinski.append(0)
+            try:
+                for fold, (train_idx, val_idx) in enumerate(kf.split(self.data_processed)):
+                    # Fit GMM on training data
+                    gmm = GaussianMixture(
+                        n_components=n_clusters,
+                        covariance_type='diag',  # Changed from 'full' to 'diag'
+                        reg_covar=1e-6,          # Added regularization
+                        random_state=self.random_state + fold,
+                        max_iter=200,
+                        n_init=5                 # Multiple initializations
+                    )
+                    gmm.fit(self.data_processed[train_idx])
+                    
+                    # Predict on validation data
+                    val_labels = gmm.predict(self.data_processed[val_idx])
+                    fold_labels.append(val_labels)
+                    
+                    # Calculate metrics on validation set
+                    fold_bic.append(gmm.bic(self.data_processed[val_idx]))
+                    fold_aic.append(gmm.aic(self.data_processed[val_idx]))
+                    
+                    n_val_samples = len(val_idx)
+                    n_val_labels = len(np.unique(val_labels))
+                    if 1 < n_val_labels < n_val_samples:
+                        fold_silhouette.append(silhouette_score(self.data_processed[val_idx], val_labels))
+                        fold_calinski.append(calinski_harabasz_score(self.data_processed[val_idx], val_labels))
+                    else:
+                        fold_silhouette.append(-1)
+                        fold_calinski.append(0)
+            except ValueError as exc:
+                failed_error = f'{type(exc).__name__}: {exc}'
             
             # Calculate stability across folds (using ARI between fold pairs)
             stability_scores = []
@@ -173,33 +179,43 @@ class NeuralActivityClustering:
             
             # Store results
             results['n_clusters'].append(n_clusters)
-            results['bic_mean'].append(np.mean(fold_bic))
-            results['bic_std'].append(np.std(fold_bic))
-            results['aic_mean'].append(np.mean(fold_aic))
-            results['aic_std'].append(np.std(fold_aic))
-            results['silhouette_mean'].append(np.mean(fold_silhouette))
-            results['silhouette_std'].append(np.std(fold_silhouette))
-            results['calinski_harabasz_mean'].append(np.mean(fold_calinski))
-            results['calinski_harabasz_std'].append(np.std(fold_calinski))
-            results['cv_stability_mean'].append(np.mean(stability_scores) if stability_scores else 0)
-            results['cv_stability_std'].append(np.std(stability_scores) if stability_scores else 0)
+            results['bic_mean'].append(np.mean(fold_bic) if failed_error is None else np.nan)
+            results['bic_std'].append(np.std(fold_bic) if failed_error is None else np.nan)
+            results['aic_mean'].append(np.mean(fold_aic) if failed_error is None else np.nan)
+            results['aic_std'].append(np.std(fold_aic) if failed_error is None else np.nan)
+            results['silhouette_mean'].append(np.mean(fold_silhouette) if failed_error is None else np.nan)
+            results['silhouette_std'].append(np.std(fold_silhouette) if failed_error is None else np.nan)
+            results['calinski_harabasz_mean'].append(np.mean(fold_calinski) if failed_error is None else np.nan)
+            results['calinski_harabasz_std'].append(np.std(fold_calinski) if failed_error is None else np.nan)
+            results['cv_stability_mean'].append(np.mean(stability_scores) if failed_error is None and stability_scores else 0)
+            results['cv_stability_std'].append(np.std(stability_scores) if failed_error is None and stability_scores else 0)
+            results['status'].append('failed' if failed_error is not None else 'ok')
+            results['error'].append(failed_error)
         
         self.cv_results = pd.DataFrame(results)
+        valid_results = self.cv_results[self.cv_results['status'] == 'ok'].copy()
+        if valid_results.empty:
+            raise ValueError('All tested cluster counts failed during GMM cross-validation.')
         
         # Find optimal number of clusters
         # Combine multiple criteria (lower BIC/AIC, higher silhouette/calinski/stability)
-        normalized_bic = (np.max(results['bic_mean']) - np.array(results['bic_mean'])) / \
-                        (np.max(results['bic_mean']) - np.min(results['bic_mean']))
-        normalized_aic = (np.max(results['aic_mean']) - np.array(results['aic_mean'])) / \
-                        (np.max(results['aic_mean']) - np.min(results['aic_mean']))
-        normalized_silhouette = (np.array(results['silhouette_mean']) - np.min(results['silhouette_mean'])) / \
-                               (np.max(results['silhouette_mean']) - np.min(results['silhouette_mean']))
-        normalized_stability = (np.array(results['cv_stability_mean']) - np.min(results['cv_stability_mean'])) / \
-                              (np.max(results['cv_stability_mean']) - np.min(results['cv_stability_mean']))
+        def _normalize(values, higher_is_better=True):
+            values = np.asarray(values, dtype=float)
+            span = np.nanmax(values) - np.nanmin(values)
+            if span == 0 or np.isnan(span):
+                return np.ones_like(values)
+            if higher_is_better:
+                return (values - np.nanmin(values)) / span
+            return (np.nanmax(values) - values) / span
+
+        normalized_bic = _normalize(valid_results['bic_mean'], higher_is_better=False)
+        normalized_aic = _normalize(valid_results['aic_mean'], higher_is_better=False)
+        normalized_silhouette = _normalize(valid_results['silhouette_mean'], higher_is_better=True)
+        normalized_stability = _normalize(valid_results['cv_stability_mean'], higher_is_better=True)
         
         # Composite score (equal weights)
         composite_score = (normalized_bic + normalized_aic + normalized_silhouette + normalized_stability) / 4
-        self.optimal_n_clusters = n_clusters_range[np.argmax(composite_score)]
+        self.optimal_n_clusters = int(valid_results['n_clusters'].iloc[np.argmax(composite_score)])
         
         print(f"Optimal number of clusters: {self.optimal_n_clusters}")
         return self.optimal_n_clusters
@@ -216,16 +232,27 @@ class NeuralActivityClustering:
             
         print(f"Fitting final GMM model with {n_clusters} clusters...")
         
-        self.best_gmm = GaussianMixture(
-            n_components=n_clusters,
-            covariance_type='diag',  # Changed from 'full' to 'diag'
-            reg_covar=1e-6,          # Added regularization
-            random_state=self.random_state,
-            max_iter=200,
-            n_init=10                # Multiple initializations
-        )
-        
-        self.best_gmm.fit(self.data_processed)
+        fit_error = None
+        for reg_covar in (1e-6, 1e-5, 1e-4, 1e-3, 1e-2):
+            self.best_gmm = GaussianMixture(
+                n_components=n_clusters,
+                covariance_type='diag',  # Changed from 'full' to 'diag'
+                reg_covar=reg_covar,
+                random_state=self.random_state,
+                max_iter=200,
+                n_init=10                # Multiple initializations
+            )
+            try:
+                self.best_gmm.fit(self.data_processed)
+                self.final_reg_covar = reg_covar
+                fit_error = None
+                break
+            except ValueError as exc:
+                fit_error = exc
+
+        if fit_error is not None:
+            raise fit_error
+
         self.cluster_labels = self.best_gmm.predict(self.data_processed)
         self.cluster_probabilities = self.best_gmm.predict_proba(self.data_processed)
         
@@ -244,7 +271,7 @@ class NeuralActivityClustering:
             
         return self.cluster_labels
     
-    def plot_cv_results(self, figsize=(15, 10), save_path=None):
+    def plot_cv_results(self, figsize=(15, 10), save_path=None, show=True):
         """Plot cross-validation results"""
         fig, axes = plt.subplots(2, 3, figsize=figsize)
         axes = axes.ravel()
@@ -278,11 +305,16 @@ class NeuralActivityClustering:
             figures_dir = os.path.join(save_path, 'Figures', 'clustering')
             if not os.path.exists(figures_dir):
                 os.makedirs(figures_dir)
-            save_path = os.path.join(figures_dir, 'clustering_metrics.pdf')
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()
+            pdf_path = os.path.join(figures_dir, 'clustering_metrics.pdf')
+            png_path = os.path.join(figures_dir, 'clustering_metrics.png')
+            fig.savefig(pdf_path, dpi=300, bbox_inches='tight')
+            fig.savefig(png_path, dpi=150, bbox_inches='tight')
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
         
-    def plot_clustering_results(self, neu_time, n_neurons, figsize=(20, 12), save_path=None):
+    def plot_clustering_results(self, neu_time, n_neurons, figsize=(20, 12), save_path=None, show=True):
 
         def apply_colormap(data, cmap):
             """Normalize data and apply colormap."""
@@ -367,16 +399,21 @@ class NeuralActivityClustering:
         #     fig.delaxes(fig.axes[-1])
 
         plt.tight_layout()
-        plt.show()
 
         if save_path is not None:
             figures_dir = os.path.join(save_path, 'Figures', 'clustering')
             os.makedirs(figures_dir, exist_ok=True)
-            fig_path = os.path.join(figures_dir, 'clustering_results.pdf')
-            plt.savefig(fig_path, dpi=300, bbox_inches='tight')
+            pdf_path = os.path.join(figures_dir, 'clustering_results.pdf')
+            png_path = os.path.join(figures_dir, 'clustering_results.png')
+            fig.savefig(pdf_path, dpi=300, bbox_inches='tight')
+            fig.savefig(png_path, dpi=150, bbox_inches='tight')
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
 
 
-def main(neural_data, neu_time, save_path=None):
+def main(neural_data, neu_time, save_path=None, show_plots=True):
     
     # Initialize and run clustering
     clustering = NeuralActivityClustering(neural_data)
@@ -391,9 +428,17 @@ def main(neural_data, neu_time, save_path=None):
     cluster_labels = clustering.fit_final_model()
     
     # Plot results
-    clustering.plot_cv_results(save_path=save_path)
+    clustering.plot_cv_results(save_path=save_path, show=show_plots)
     n_neurons = neural_data.shape[0]
-    clustering.plot_clustering_results(neu_time, n_neurons, save_path=save_path)
+    clustering.plot_clustering_results(neu_time, n_neurons, save_path=save_path, show=show_plots)
+    return {
+        'optimal_k': optimal_k,
+        'cluster_labels': cluster_labels,
+        'cluster_counts': np.bincount(cluster_labels).tolist(),
+        'final_metrics': clustering.final_metrics,
+        'final_reg_covar': getattr(clustering, 'final_reg_covar', None),
+        'cv_results': clustering.cv_results,
+    }
 
 def pool_session_data(neural_trials_list, labels_list, state, l_frames, r_frames, indices):
     """
@@ -491,7 +536,7 @@ def get_avg_neural_activity(neu_seq, trial_type):
     avg_neuron = np.nanmean(neu_seq[long_trials], axis=0)  # Shape: (n_neurons, time)
     return avg_neuron
     
-def clustering_GMM(neural_trials, labels, save_path = None, pooling = False):
+def clustering_GMM(neural_trials, labels, save_path = None, pooling = False, show_plots=True):
     
     # get the framse for the smallest time interval among the long trials
     l_frames = 0
@@ -507,4 +552,4 @@ def clustering_GMM(neural_trials, labels, save_path = None, pooling = False):
 
     # Average neural activity from first stim onset to second stim onset for each neuron
     neural_data = get_avg_neural_activity(neu_seq, trial_type)
-    main(neural_data,neu_time, save_path = save_path)
+    return main(neural_data, neu_time, save_path=save_path, show_plots=show_plots)
